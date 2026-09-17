@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Generated (deterministic, seeded) synthetic data and pipeline outputs. Regenerate with
+# `python data/generate_synthetic_data.py && python -m src.pipeline`.
+data/raw/
+outputs/
+
+*.egg-info/
+.pytest_cache/
+
+# Original assignment prompt, kept locally for reference, not part of the submission repo.
+data-analyst-forecasting-task.pdf
