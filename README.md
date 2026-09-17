@@ -3,7 +3,7 @@
 Take-home submission: forecasting models for hospital-level consult volume, call volume, and busiest-hour-of-day,
 plus a Streamlit dashboard for browsing the results per hospital.
 
-**Live dashboard:** _added after deployment_
+**Live dashboard:** [sevaro-forecasting-production.up.railway.app](https://sevaro-forecasting-production.up.railway.app)
 **Methodology notebook:** [`notebooks/forecasting.ipynb`](notebooks/forecasting.ipynb), start here for the full
 write-up (problem framing, model choices and rejects, backtested accuracy, charts, limitations).
 
