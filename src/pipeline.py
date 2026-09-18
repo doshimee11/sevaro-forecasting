@@ -80,6 +80,49 @@ def run_call_forecasts(tables: dict, calls_local: pd.DataFrame) -> dict:
     return result
 
 
+def compute_missed_rate_trend(caselogs_local: pd.DataFrame, calls_local: pd.DataFrame) -> dict:
+    """Monthly missed-consult and missed-call rate per hospital."""
+    def monthly_rate(df: pd.DataFrame, missed_col: str) -> pd.DataFrame:
+        d = df[["facility", "local_date", missed_col]].copy()
+        d["month"] = pd.to_datetime(d["local_date"]).dt.to_period("M").dt.to_timestamp()
+        grouped = d.groupby(["facility", "month"])[missed_col].agg(missed="sum", total="size")
+        grouped["rate"] = grouped["missed"] / grouped["total"]
+        return grouped.reset_index()
+
+    consult_rates = monthly_rate(caselogs_local, "isMissed")
+    call_rates = monthly_rate(calls_local, "is_call_missed")
+
+    def to_records(rates: pd.DataFrame, facility: str) -> list[dict]:
+        sub = rates[rates["facility"] == facility]
+        return [
+            {"date": m.strftime("%Y-%m"), "missed": int(mi), "total": int(t), "rate": round(float(r), 4)}
+            for m, mi, t, r in zip(sub["month"], sub["missed"], sub["total"], sub["rate"])
+        ]
+
+    facilities = sorted(set(consult_rates["facility"]) | set(call_rates["facility"]))
+    return {
+        fac: dict(consult=to_records(consult_rates, fac), call=to_records(call_rates, fac))
+        for fac in facilities
+    }
+
+
+def compute_weekday_pattern(daily_consults: pd.DataFrame, daily_calls: pd.DataFrame) -> dict:
+    """Average consults/calls by local day-of-week per hospital, zero-count days included."""
+    def avg_by_weekday(df: pd.DataFrame, value_col: str) -> dict:
+        d = df.copy()
+        d["dow"] = pd.to_datetime(d["local_date"]).dt.dayofweek
+        grouped = d.groupby(["facility", "dow"])[value_col].mean()
+        result = {}
+        for fac in d["facility"].unique():
+            result[fac] = [round(float(grouped.get((fac, dow), 0.0)), 2) for dow in range(7)]
+        return result
+
+    return dict(
+        consults=avg_by_weekday(daily_consults, "consults"),
+        calls=avg_by_weekday(daily_calls, "calls"),
+    )
+
+
 def run_busiest_hour(calls_local: pd.DataFrame) -> dict:
     result = {}
     for facility in sorted(calls_local["facility"].unique()):
@@ -182,6 +225,10 @@ def main():
     busiest_hour_results = run_busiest_hour(calls_local)
     data_health = compute_data_health(tables, caselogs_local, calls_local, consult_results, call_results)
     network_trend = compute_network_trend(consult_results, call_results)
+    missed_rate = compute_missed_rate_trend(caselogs_local, calls_local)
+    weekday_pattern = compute_weekday_pattern(
+        data_loader.daily_consult_counts(caselogs_local), data_loader.daily_call_counts(calls_local)
+    )
 
     with open(f"{OUT_DIR}/facilities.json", "w") as f:
         json.dump(facilities_meta, f, indent=2, default=str)
@@ -195,6 +242,10 @@ def main():
         json.dump(data_health, f, indent=2, default=str)
     with open(f"{OUT_DIR}/network_trend.json", "w") as f:
         json.dump(network_trend, f, indent=2, default=str)
+    with open(f"{OUT_DIR}/missed_rate.json", "w") as f:
+        json.dump(missed_rate, f, indent=2, default=str)
+    with open(f"{OUT_DIR}/weekday_pattern.json", "w") as f:
+        json.dump(weekday_pattern, f, indent=2, default=str)
 
     print(f"Wrote outputs for {len(consult_results)} hospitals (consults), "
           f"{len(call_results)} (calls), {len(busiest_hour_results)} (busiest hour) to {OUT_DIR}/")

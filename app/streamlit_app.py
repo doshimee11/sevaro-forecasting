@@ -29,7 +29,11 @@ def load_outputs():
         data_health = json.load(f)
     with open(os.path.join(OUT_DIR, "network_trend.json")) as f:
         network_trend = json.load(f)
-    return facilities, consult, calls, busiest, data_health, network_trend
+    with open(os.path.join(OUT_DIR, "missed_rate.json")) as f:
+        missed_rate = json.load(f)
+    with open(os.path.join(OUT_DIR, "weekday_pattern.json")) as f:
+        weekday_pattern = json.load(f)
+    return facilities, consult, calls, busiest, data_health, network_trend, missed_rate, weekday_pattern
 
 
 def missing_outputs_message():
@@ -111,6 +115,53 @@ def data_health_table(data_health: dict, name_by_id: dict) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("Hospital")
 
 
+def busiest_hour_comparison_chart(busiest: dict, name_by_id: dict):
+    """One row per hospital, its normalized hour-of-day share, so patterns compare across
+    hospitals at very different volumes without raw counts drowning out the sparse ones."""
+    fac_ids = [f for f in busiest if busiest[f].get("status") == "ok"]
+    fac_ids.sort(key=lambda f: busiest[f]["overall_busiest_hour"])
+    z = [busiest[f]["hour_share"] for f in fac_ids]
+    y = [name_by_id.get(f, f) for f in fac_ids]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=list(range(24)), y=y, colorscale="YlOrRd", colorbar=dict(title="Share of calls"),
+    ))
+    fig.update_layout(
+        title="Busiest hour by hospital (normalized), sorted by peak hour",
+        xaxis_title="Local hour of day", height=420,
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    return fig
+
+
+def weekday_bar_chart(consult_avg: list, call_avg: list, title: str):
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=days, y=consult_avg, name="Avg consults/day", marker=dict(color="#2f4b7c")))
+    fig.add_trace(go.Bar(x=days, y=call_avg, name="Avg calls/day", marker=dict(color="#118ab2")))
+    fig.update_layout(
+        barmode="group", title=title, height=320,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    return fig
+
+
+def missed_rate_chart(records: list, y_label: str, title: str, color: str):
+    df = pd.DataFrame(records)
+    df["date"] = pd.to_datetime(df["date"])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["rate"] * 100, mode="lines+markers", name=y_label,
+        line=dict(color=color, width=2), marker=dict(size=4),
+    ))
+    fig.update_layout(
+        title=title, yaxis_title=f"{y_label} (%)", height=280,
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    return fig
+
+
 def backtest_badge(bt: dict):
     status = bt.get("status")
     if status != "ok":
@@ -130,7 +181,7 @@ def main():
         missing_outputs_message()
         st.stop()
 
-    facilities, consult, calls, busiest, data_health, network_trend = load_outputs()
+    facilities, consult, calls, busiest, data_health, network_trend, missed_rate, weekday_pattern = load_outputs()
 
     st.title("Sevaro Forecasting Dashboard")
     st.caption(
@@ -188,6 +239,13 @@ def main():
             "others', so it's narrower than just adding up each hospital's own interval."
         )
 
+        st.subheader("Busiest hour across the network")
+        st.plotly_chart(busiest_hour_comparison_chart(busiest, name_by_id), width="stretch")
+        st.caption(
+            "Each row is one hospital's hour-of-day call share, so patterns compare fairly "
+            "regardless of overall volume. See the Busiest Hour tab for one hospital in detail."
+        )
+
         st.subheader("Data health")
         net = data_health["network"]
         c1, c2 = st.columns(2)
@@ -209,6 +267,14 @@ def main():
             )
             backtest_badge(res["backtest"])
 
+            mr = missed_rate.get(fac_id, {}).get("consult", [])
+            if mr:
+                st.plotly_chart(
+                    missed_rate_chart(mr, "Missed consult rate",
+                                       f"{name_by_id[fac_id]}: missed consults over time", "#d1495b"),
+                    width="stretch",
+                )
+
     with tab2:
         res = calls.get(fac_id)
         if res is None:
@@ -220,6 +286,14 @@ def main():
                 width="stretch",
             )
             backtest_badge(res["backtest"])
+
+            mr = missed_rate.get(fac_id, {}).get("call", [])
+            if mr:
+                st.plotly_chart(
+                    missed_rate_chart(mr, "Missed call rate",
+                                       f"{name_by_id[fac_id]}: missed calls over time", "#d1495b"),
+                    width="stretch",
+                )
 
     with tab3:
         res = busiest.get(fac_id)
@@ -250,6 +324,14 @@ def main():
                 margin=dict(l=10, r=10, t=60, b=10),
             )
             st.plotly_chart(fig, width="stretch")
+
+            consult_avg = weekday_pattern["consults"].get(fac_id)
+            call_avg = weekday_pattern["calls"].get(fac_id)
+            if consult_avg and call_avg:
+                st.plotly_chart(
+                    weekday_bar_chart(consult_avg, call_avg, f"{name_by_id[fac_id]}: average volume by weekday"),
+                    width="stretch",
+                )
 
             st.caption(
                 "Confidence is the fraction of 500 bootstrap resamples of historical call hours whose mode "
